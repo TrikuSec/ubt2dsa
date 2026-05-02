@@ -17,6 +17,8 @@ from map_packages import PackageMapper
 from parse_uct import CVERecord, PackageStatus, parse_uct_file, parse_uct_repository
 
 UNRESOLVED_STATUSES = {"needed", "pending", "deferred"}
+FIXED_STATUSES = {"released", "released-esm"}
+SUITE_FEED_STATUSES = UNRESOLVED_STATUSES | FIXED_STATUSES
 URGENCY_MAP = {
     "negligible": "L",
     "low": "L",
@@ -291,7 +293,7 @@ def build_suite_feed(
 
     for cve in sorted(records, key=lambda r: r.cve_id):
         suite_pkgs = cve.packages.get(suite, {})
-        if any(status.status in UNRESOLVED_STATUSES for status in suite_pkgs.values()):
+        if any(status.status in SUITE_FEED_STATUSES for status in suite_pkgs.values()):
             selected.append(cve)
 
     cve_to_idx = {cve.cve_id: idx for idx, cve in enumerate(selected)}
@@ -300,10 +302,20 @@ def build_suite_feed(
         vnum = cve_to_idx[cve.cve_id]
         suite_pkgs = cve.packages.get(suite, {})
         for srcpkg, status in sorted(suite_pkgs.items()):
-            if status.status not in UNRESOLVED_STATUSES:
+            if status.status not in SUITE_FEED_STATUSES:
                 continue
 
-            unstable_version = normalize_single_version(cve.upstream_versions.get(srcpkg, ""))
+            fix_available = status.status in FIXED_STATUSES
+            unstable_version = ""
+            if fix_available:
+                unstable_version = normalize_single_version(status.version or "")
+            if not unstable_version:
+                unstable_version = normalize_single_version(cve.upstream_versions.get(srcpkg, ""))
+
+            if fix_available and not unstable_version:
+                # Do not emit fixed rows without a comparable fixed version.
+                continue
+
             other_versions = collect_other_fixed_versions(cve, srcpkg, current_suite=suite)
 
             binaries, package_type = select_binaries_for_feed(
@@ -314,7 +326,7 @@ def build_suite_feed(
             flags = build_flags(
                 cve.priority,
                 cve.description,
-                fix_available=(status.status == "released"),
+                fix_available=fix_available,
                 package_type=package_type,
             )
 
