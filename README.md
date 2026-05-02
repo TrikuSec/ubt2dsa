@@ -56,8 +56,11 @@ python3 scripts/generate.py \
 - `GENERIC` feed keeps CVE section only (no package rows) to avoid extremely
   heavy generation and memory usage.
 - Per-suite source→binary expansion is capped (`--max-binaries-per-source`,
-  default 25) and prunes debug/kernel-versioned binaries to keep feed sizes
-  publishable on GitHub.
+  default 25; CI currently uses 10) and prunes debug/kernel-versioned binaries
+  to keep feed sizes publishable on GitHub.
+- Because of this pruning/capping, some source packages may not list every
+  possible binary variant in Section 2/3; this is an intentional tradeoff to
+  stay within GitHub's file size limits.
 
 ## Contributing / reporting issues
 
