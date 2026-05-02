@@ -55,6 +55,9 @@ python3 scripts/generate.py \
   Ubuntu backports.
 - `GENERIC` feed keeps CVE section only (no package rows) to avoid extremely
   heavy generation and memory usage.
+- Per-suite source→binary expansion is capped (`--max-binaries-per-source`,
+  default 25) and prunes debug/kernel-versioned binaries to keep feed sizes
+  publishable on GitHub.
 
 ## Contributing / reporting issues
 

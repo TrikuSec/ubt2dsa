@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
+import re
 import subprocess
 
 from map_packages import PackageMapper
@@ -24,6 +25,8 @@ URGENCY_MAP = {
 }
 REMOTE_NETWORK_HINTS = ("network", "remote", "http", "https", "tcp", "udp", "socket", "dns")
 REMOTE_LOCAL_HINTS = ("local privilege", "local exploit", "local user", "locally")
+KERNEL_VERSIONED_RE = re.compile(r"-\d+\.\d+\.\d+-\d+")
+EXCLUDED_BINARY_SUFFIXES = ("-dbgsym", "-dbg", ".udeb")
 
 
 @dataclass
@@ -48,11 +51,11 @@ def detect_remote_flag(description: str) -> str:
     return "?"
 
 
-def build_flags(priority: str, description: str, fix_available: bool) -> str:
+def build_flags(priority: str, description: str, fix_available: bool, package_type: str = "B") -> str:
     urgency = URGENCY_MAP.get(priority.lower(), " ")
     remote = detect_remote_flag(description)
     fixed = "F" if fix_available else " "
-    return f"B{urgency}{remote}{fixed}"
+    return f"{package_type}{urgency}{remote}{fixed}"
 
 
 def get_uct_commit(uct_path: Path) -> str:
@@ -77,6 +80,32 @@ def collect_other_fixed_versions(cve: CVERecord, srcpkg: str, current_suite: str
         if status.status in {"released", "released-esm"} and status.version:
             versions.add(status.version)
     return " ".join(sorted(versions))
+
+
+def select_binaries_for_feed(srcpkg: str, binaries: list[str], max_per_source: int) -> tuple[list[str], str]:
+    filtered: list[str] = []
+    seen: set[str] = set()
+
+    for pkg in sorted(binaries):
+        if pkg in seen:
+            continue
+        seen.add(pkg)
+
+        if pkg.endswith(EXCLUDED_BINARY_SUFFIXES):
+            continue
+        if pkg.startswith("linux-") and KERNEL_VERSIONED_RE.search(pkg):
+            continue
+        filtered.append(pkg)
+
+    if not filtered:
+        return [srcpkg], "S"
+
+    if len(filtered) > max_per_source:
+        if srcpkg.startswith("linux"):
+            return [srcpkg], "S"
+        return filtered[:max_per_source], "B"
+
+    return filtered, "B"
 
 
 def write_feed(
@@ -173,6 +202,10 @@ def load_records_incremental(
     if not isinstance(old_files, dict):
         old_files = {}
 
+    cached_suites = state.get("suites") if isinstance(state, dict) else None
+    if sorted(suites) != sorted(cached_suites or []):
+        old_files = {}
+
     subdirs = ["active"]
     if include_retired:
         subdirs.append("retired")
@@ -213,6 +246,7 @@ def load_records_incremental(
         json.dumps(
             {
                 "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "suites": sorted(suites),
                 "files": new_files,
             },
             sort_keys=True,
@@ -227,6 +261,7 @@ def build_suite_feed(
     suite: str,
     records: list[CVERecord],
     suite_map: dict[str, list[str]],
+    max_binaries_per_source: int,
 ) -> tuple[list[CVERecord], list[tuple[str, int, str, str, str]], list[str]]:
     selected: list[CVERecord] = []
     row_keys: set[tuple[str, int]] = set()
@@ -249,9 +284,19 @@ def build_suite_feed(
 
             unstable_version = cve.upstream_versions.get(srcpkg, "")
             other_versions = collect_other_fixed_versions(cve, srcpkg, current_suite=suite)
-            flags = build_flags(cve.priority, cve.description, fix_available=(status.status == "released"))
 
-            binaries = suite_map.get(srcpkg, [srcpkg])
+            binaries, package_type = select_binaries_for_feed(
+                srcpkg,
+                suite_map.get(srcpkg, [srcpkg]),
+                max_per_source=max_binaries_per_source,
+            )
+            flags = build_flags(
+                cve.priority,
+                cve.description,
+                fix_available=(status.status == "released"),
+                package_type=package_type,
+            )
+
             for binary in binaries:
                 row_key = (binary, vnum)
                 if row_key in row_keys:
@@ -313,6 +358,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Include retired/ CVE files (default: only active/ for performance)",
     )
+    parser.add_argument(
+        "--max-binaries-per-source",
+        type=int,
+        default=25,
+        help="Cap binary package expansion per source package",
+    )
     return parser.parse_args()
 
 
@@ -337,6 +388,7 @@ def main() -> None:
         "uct_commit": get_uct_commit(uct_root),
         "include_retired": bool(args.include_retired),
         "state_cache": not args.no_state_cache,
+        "max_binaries_per_source": max(1, args.max_binaries_per_source),
         "suites": {},
     }
 
@@ -346,6 +398,7 @@ def main() -> None:
             suite=suite,
             records=records,
             suite_map=suite_map,
+            max_binaries_per_source=max(1, args.max_binaries_per_source),
         )
         result = write_feed(out_dir / suite, cves, rows, pairs)
         metadata["suites"][suite] = {"cves": result.cve_count, "packages": result.package_rows}

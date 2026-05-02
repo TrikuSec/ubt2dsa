@@ -55,7 +55,8 @@ jobs:
             --uct uct \
             --out gh-pages-out/release/1 \
             --metadata gh-pages-out/metadata.json \
-            --state-file .cache/uct-state.json
+            --state-file .cache/uct-state.json \
+            --max-binaries-per-source 10
 
       - name: Publish gh-pages
         run: |
