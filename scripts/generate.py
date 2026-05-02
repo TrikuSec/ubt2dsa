@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 import re
 import subprocess
+import zlib
 
 from map_packages import PackageMapper
 from parse_uct import CVERecord, PackageStatus, parse_uct_file, parse_uct_repository
@@ -69,6 +70,20 @@ def get_uct_commit(uct_path: Path) -> str:
         return "unknown"
 
 
+def normalize_single_version(version: str) -> str:
+    parts = [p for p in re.split(r"[\s,]+", version.strip()) if p]
+    return parts[0] if parts else ""
+
+
+def normalize_version_list(versions: set[str]) -> str:
+    parts: set[str] = set()
+    for version in versions:
+        for token in re.split(r"[\s,]+", version.strip()):
+            if token:
+                parts.add(token)
+    return " ".join(sorted(parts))
+
+
 def collect_other_fixed_versions(cve: CVERecord, srcpkg: str, current_suite: str | None) -> str:
     versions: set[str] = set()
     for suite, pkg_map in cve.packages.items():
@@ -79,7 +94,7 @@ def collect_other_fixed_versions(cve: CVERecord, srcpkg: str, current_suite: str
             continue
         if status.status in {"released", "released-esm"} and status.version:
             versions.add(status.version)
-    return " ".join(sorted(versions))
+    return normalize_version_list(versions)
 
 
 def select_binaries_for_feed(srcpkg: str, binaries: list[str], max_per_source: int) -> tuple[list[str], str]:
@@ -112,25 +127,31 @@ def write_feed(
     out_file: Path,
     cves: list[CVERecord],
     rows: list[tuple[str, int, str, str, str]],
-    source_binary_pairs: list[str],
+    source_binary_map: dict[str, set[str]],
 ) -> FeedResult:
     section1 = [f"{cve.cve_id},,{sanitize_description(cve.description)}" for cve in cves]
     section2 = [
         f"{pkg},{vnum},{flags},{unstable_version},{other_versions}"
         for pkg, vnum, flags, unstable_version, other_versions in sorted(rows, key=lambda r: (r[0], r[1]))
     ]
-    section3 = "" if not source_binary_pairs else ",".join(sorted(set(source_binary_pairs)))
+    section3 = [
+        f"{srcpkg},{' '.join(sorted(binaries))}"
+        for srcpkg, binaries in sorted(source_binary_map.items())
+    ]
 
-    content = "VERSION 1\n\n"
-    content += "\n".join(section1)
+    content = "VERSION 1\n"
+    if section1:
+        content += "\n".join(section1)
     content += "\n\n"
-    content += "\n".join(section2)
+    if section2:
+        content += "\n".join(section2)
     content += "\n\n"
-    content += section3
+    if section3:
+        content += "\n".join(section3)
     content += "\n"
 
     out_file.parent.mkdir(parents=True, exist_ok=True)
-    out_file.write_text(content, encoding="utf-8")
+    out_file.write_bytes(zlib.compress(content.encode("utf-8")))
 
     return FeedResult(cve_count=len(cves), package_rows=len(section2))
 
@@ -262,11 +283,11 @@ def build_suite_feed(
     records: list[CVERecord],
     suite_map: dict[str, list[str]],
     max_binaries_per_source: int,
-) -> tuple[list[CVERecord], list[tuple[str, int, str, str, str]], list[str]]:
+) -> tuple[list[CVERecord], list[tuple[str, int, str, str, str]], dict[str, set[str]]]:
     selected: list[CVERecord] = []
     row_keys: set[tuple[str, int]] = set()
     rows: list[tuple[str, int, str, str, str]] = []
-    source_binary_pairs: list[str] = []
+    source_binary_map: dict[str, set[str]] = {}
 
     for cve in sorted(records, key=lambda r: r.cve_id):
         suite_pkgs = cve.packages.get(suite, {})
@@ -282,7 +303,7 @@ def build_suite_feed(
             if status.status not in UNRESOLVED_STATUSES:
                 continue
 
-            unstable_version = cve.upstream_versions.get(srcpkg, "")
+            unstable_version = normalize_single_version(cve.upstream_versions.get(srcpkg, ""))
             other_versions = collect_other_fixed_versions(cve, srcpkg, current_suite=suite)
 
             binaries, package_type = select_binaries_for_feed(
@@ -303,9 +324,9 @@ def build_suite_feed(
                     continue
                 row_keys.add(row_key)
                 rows.append((binary, vnum, flags, unstable_version, other_versions))
-                source_binary_pairs.append(f"{srcpkg}:{binary}")
+                source_binary_map.setdefault(srcpkg, set()).add(binary)
 
-    return selected, rows, source_binary_pairs
+    return selected, rows, source_binary_map
 
 
 def build_generic_feed(records: list[CVERecord], suites: list[str]) -> list[CVERecord]:
@@ -404,7 +425,7 @@ def main() -> None:
         metadata["suites"][suite] = {"cves": result.cve_count, "packages": result.package_rows}
 
     generic_cves = build_generic_feed(records=records, suites=suites)
-    result = write_feed(out_dir / "GENERIC", generic_cves, [], [])
+    result = write_feed(out_dir / "GENERIC", generic_cves, [], {})
     metadata["suites"]["GENERIC"] = {"cves": result.cve_count, "packages": result.package_rows}
 
     if args.metadata:

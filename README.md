@@ -10,7 +10,7 @@ tracker endpoints.
 
 ```bash
 debsecan --suite "$(lsb_release --codename --short)" \
-         --source "https://trikusec.github.io/ubt2dsa/" \
+         --source "https://trikusec.github.io/ubt2dsa/release/1/" \
          --format summary
 ```
 
