@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-05-02T13:17:27Z",
+  "generated_at": "2026-05-02T13:33:08Z",
   "include_retired": false,
   "max_binaries_per_source": 10,
   "state_cache": true,
@@ -9,20 +9,20 @@
       "packages": 0
     },
     "bionic": {
-      "cves": 0,
-      "packages": 0
+      "cves": 3247,
+      "packages": 50797
     },
     "focal": {
-      "cves": 0,
-      "packages": 0
+      "cves": 7261,
+      "packages": 157653
     },
     "jammy": {
-      "cves": 6283,
-      "packages": 88815
+      "cves": 12017,
+      "packages": 320462
     },
     "noble": {
-      "cves": 4133,
-      "packages": 49572
+      "cves": 8381,
+      "packages": 162997
     }
   },
   "uct_commit": "95ac97bce"
