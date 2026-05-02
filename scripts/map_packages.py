@@ -23,6 +23,7 @@ class PackageMapper:
 
     def __post_init__(self) -> None:
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self._memory_cache: dict[str, dict[str, list[str]]] = {}
 
     def _cache_path(self, suite: str) -> Path:
         return self.cache_dir / f"{suite}.json"
@@ -75,10 +76,15 @@ class PackageMapper:
         return source_to_bins
 
     def get_source_to_binaries(self, suite: str, refresh: bool = False) -> dict[str, list[str]]:
+        if suite in self._memory_cache and not refresh:
+            return self._memory_cache[suite]
+
         cache_file = self._cache_path(suite)
 
         if cache_file.exists() and not refresh:
-            return json.loads(cache_file.read_text(encoding="utf-8"))
+            mapping = json.loads(cache_file.read_text(encoding="utf-8"))
+            self._memory_cache[suite] = mapping
+            return mapping
 
         text = self._download_packages_index(suite)
         mapping = {
@@ -87,6 +93,7 @@ class PackageMapper:
         }
 
         cache_file.write_text(json.dumps(mapping, sort_keys=True), encoding="utf-8")
+        self._memory_cache[suite] = mapping
         return mapping
 
     def get_binary_packages(self, suite: str, srcpkg: str, refresh: bool = False) -> list[str]:

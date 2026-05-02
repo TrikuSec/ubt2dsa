@@ -108,8 +108,7 @@ def write_feed(
 def build_suite_feed(
     suite: str,
     records: list[CVERecord],
-    mapper: PackageMapper,
-    refresh_package_cache: bool,
+    suite_map: dict[str, list[str]],
 ) -> tuple[list[CVERecord], list[tuple[str, int, str, str, str]], list[str]]:
     selected: list[CVERecord] = []
     row_keys: set[tuple[str, int]] = set()
@@ -140,7 +139,7 @@ def build_suite_feed(
             other_versions = collect_other_fixed_versions(cve, srcpkg, current_suite=suite)
             flags = build_flags(cve.priority, cve.description, fix_available=(status.status == "released"))
 
-            binaries = mapper.get_binary_packages(suite, srcpkg, refresh=refresh_package_cache)
+            binaries = suite_map.get(srcpkg, [srcpkg])
             for binary in binaries:
                 row_key = (binary, vnum)
                 if row_key in row_keys:
@@ -154,18 +153,12 @@ def build_suite_feed(
 
 def build_generic_feed(
     records: list[CVERecord],
-    mapper: PackageMapper,
-    refresh_package_cache: bool,
+    suite_maps: dict[str, dict[str, list[str]]],
     suites: list[str],
 ) -> tuple[list[CVERecord], list[tuple[str, int, str, str, str]], list[str]]:
     selected: list[CVERecord] = []
     rows: list[tuple[str, int, str, str, str]] = []
     row_keys: set[tuple[str, int]] = set()
-
-    suite_maps = {
-        suite: mapper.get_source_to_binaries(suite, refresh=refresh_package_cache)
-        for suite in suites
-    }
 
     for cve in sorted(records, key=lambda r: r.cve_id):
         unresolved_sources: set[str] = set()
@@ -237,6 +230,10 @@ def main() -> None:
     records = parse_uct_repository(args.uct, suites=set(suites))
 
     mapper = PackageMapper(cache_dir=Path(args.cache_dir))
+    suite_maps = {
+        suite: mapper.get_source_to_binaries(suite, refresh=args.refresh_package_cache)
+        for suite in suites
+    }
 
     metadata: dict[str, object] = {
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -248,16 +245,14 @@ def main() -> None:
         cves, rows, pairs = build_suite_feed(
             suite=suite,
             records=records,
-            mapper=mapper,
-            refresh_package_cache=args.refresh_package_cache,
+            suite_map=suite_maps[suite],
         )
         result = write_feed(out_dir / suite, cves, rows, pairs)
         metadata["suites"][suite] = {"cves": result.cve_count, "packages": result.package_rows}
 
     cves, rows, pairs = build_generic_feed(
         records=records,
-        mapper=mapper,
-        refresh_package_cache=args.refresh_package_cache,
+        suite_maps=suite_maps,
         suites=suites,
     )
     result = write_feed(out_dir / "GENERIC", cves, rows, pairs)
