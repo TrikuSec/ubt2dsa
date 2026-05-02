@@ -58,6 +58,10 @@ jobs:
             --state-file .cache/uct-state.json \
             --max-binaries-per-source 10
 
+      - name: Sync static site files
+        run: |
+          cp index.html gh-pages-out/index.html
+
       - name: Publish gh-pages
         run: |
           cd gh-pages-out
