@@ -6,12 +6,13 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import hashlib
 import json
 from pathlib import Path
 import subprocess
 
 from map_packages import PackageMapper
-from parse_uct import CVERecord, parse_uct_repository
+from parse_uct import CVERecord, PackageStatus, parse_uct_file, parse_uct_repository
 
 UNRESOLVED_STATUSES = {"needed", "pending", "deferred"}
 URGENCY_MAP = {
@@ -105,6 +106,123 @@ def write_feed(
     return FeedResult(cve_count=len(cves), package_rows=len(section2))
 
 
+def sha1_file(path: Path) -> str:
+    h = hashlib.sha1()
+    with path.open("rb") as f:
+        while True:
+            chunk = f.read(1024 * 1024)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def serialize_record(record: CVERecord) -> dict[str, object]:
+    return {
+        "cve_id": record.cve_id,
+        "priority": record.priority,
+        "description": record.description,
+        "packages": {
+            suite: {
+                srcpkg: {"status": ps.status, "version": ps.version}
+                for srcpkg, ps in pkg_map.items()
+            }
+            for suite, pkg_map in record.packages.items()
+        },
+        "upstream_versions": record.upstream_versions,
+    }
+
+
+def deserialize_record(data: dict[str, object]) -> CVERecord:
+    packages: dict[str, dict[str, PackageStatus]] = {}
+    for suite, pkg_map in (data.get("packages") or {}).items():
+        packages[suite] = {}
+        for srcpkg, ps in pkg_map.items():
+            packages[suite][srcpkg] = PackageStatus(
+                status=str(ps.get("status", "")),
+                version=ps.get("version"),
+            )
+
+    return CVERecord(
+        cve_id=str(data.get("cve_id", "")),
+        priority=str(data.get("priority", "medium")),
+        description=str(data.get("description", "")),
+        packages=packages,
+        upstream_versions={k: str(v) for k, v in (data.get("upstream_versions") or {}).items()},
+    )
+
+
+def load_records_incremental(
+    uct_root: Path,
+    suites: set[str],
+    include_retired: bool,
+    state_file: Path | None,
+    use_state_cache: bool,
+) -> list[CVERecord]:
+    if not use_state_cache or state_file is None:
+        return parse_uct_repository(uct_root, suites=suites, include_retired=include_retired)
+
+    state: dict[str, object] = {}
+    if state_file.exists():
+        try:
+            state = json.loads(state_file.read_text(encoding="utf-8"))
+        except Exception:
+            state = {}
+
+    old_files = state.get("files", {}) if isinstance(state, dict) else {}
+    if not isinstance(old_files, dict):
+        old_files = {}
+
+    subdirs = ["active"]
+    if include_retired:
+        subdirs.append("retired")
+
+    new_files: dict[str, dict[str, object]] = {}
+
+    for subdir in subdirs:
+        directory = uct_root / subdir
+        if not directory.exists():
+            continue
+
+        for path in sorted(directory.iterdir()):
+            if not path.is_file():
+                continue
+
+            rel = str(path.relative_to(uct_root))
+            digest = sha1_file(path)
+            prev = old_files.get(rel)
+
+            if isinstance(prev, dict) and prev.get("sha1") == digest and "record" in prev:
+                new_files[rel] = prev
+                continue
+
+            record = parse_uct_file(path, suites=suites)
+            new_files[rel] = {
+                "sha1": digest,
+                "record": serialize_record(record) if record else None,
+            }
+
+    records = [
+        deserialize_record(entry["record"])
+        for entry in new_files.values()
+        if isinstance(entry, dict) and entry.get("record")
+    ]
+
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    state_file.write_text(
+        json.dumps(
+            {
+                "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "files": new_files,
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+    return records
+
+
 def build_suite_feed(
     suite: str,
     records: list[CVERecord],
@@ -117,14 +235,8 @@ def build_suite_feed(
 
     for cve in sorted(records, key=lambda r: r.cve_id):
         suite_pkgs = cve.packages.get(suite, {})
-        unresolved = {
-            srcpkg: status
-            for srcpkg, status in suite_pkgs.items()
-            if status.status in UNRESOLVED_STATUSES
-        }
-        if not unresolved:
-            continue
-        selected.append(cve)
+        if any(status.status in UNRESOLVED_STATUSES for status in suite_pkgs.values()):
+            selected.append(cve)
 
     cve_to_idx = {cve.cve_id: idx for idx, cve in enumerate(selected)}
 
@@ -151,57 +263,23 @@ def build_suite_feed(
     return selected, rows, source_binary_pairs
 
 
-def build_generic_feed(
-    records: list[CVERecord],
-    suite_maps: dict[str, dict[str, list[str]]],
-    suites: list[str],
-) -> tuple[list[CVERecord], list[tuple[str, int, str, str, str]], list[str]]:
+def build_generic_feed(records: list[CVERecord], suites: list[str]) -> list[CVERecord]:
     selected: list[CVERecord] = []
-    rows: list[tuple[str, int, str, str, str]] = []
-    row_keys: set[tuple[str, int]] = set()
 
     for cve in sorted(records, key=lambda r: r.cve_id):
-        unresolved_sources: set[str] = set()
+        unresolved = False
         for suite in suites:
-            for srcpkg, status in cve.packages.get(suite, {}).items():
+            for status in cve.packages.get(suite, {}).values():
                 if status.status in UNRESOLVED_STATUSES:
-                    unresolved_sources.add(srcpkg)
+                    unresolved = True
+                    break
+            if unresolved:
+                break
 
-        if not unresolved_sources:
-            continue
+        if unresolved:
+            selected.append(cve)
 
-        selected.append(cve)
-
-    cve_to_idx = {cve.cve_id: idx for idx, cve in enumerate(selected)}
-
-    for cve in selected:
-        vnum = cve_to_idx[cve.cve_id]
-        unresolved_sources: set[str] = set()
-
-        for suite in suites:
-            for srcpkg, status in cve.packages.get(suite, {}).items():
-                if status.status in UNRESOLVED_STATUSES:
-                    unresolved_sources.add(srcpkg)
-
-        for srcpkg in sorted(unresolved_sources):
-            unstable_version = cve.upstream_versions.get(srcpkg, "")
-            other_versions = collect_other_fixed_versions(cve, srcpkg, current_suite=None)
-            flags = build_flags(cve.priority, cve.description, fix_available=False)
-
-            binaries: set[str] = set()
-            for suite in suites:
-                binaries.update(suite_maps[suite].get(srcpkg, []))
-            if not binaries:
-                binaries = {srcpkg}
-
-            for binary in sorted(binaries):
-                row_key = (binary, vnum)
-                if row_key in row_keys:
-                    continue
-                row_keys.add(row_key)
-                rows.append((binary, vnum, flags, unstable_version, other_versions))
-
-    return selected, rows, []
+    return selected
 
 
 def parse_args() -> argparse.Namespace:
@@ -220,6 +298,21 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Refresh package mapping cache",
     )
+    parser.add_argument(
+        "--state-file",
+        default=".cache/uct-state.json",
+        help="Incremental parse state cache file",
+    )
+    parser.add_argument(
+        "--no-state-cache",
+        action="store_true",
+        help="Disable incremental parse state and parse everything",
+    )
+    parser.add_argument(
+        "--include-retired",
+        action="store_true",
+        help="Include retired/ CVE files (default: only active/ for performance)",
+    )
     return parser.parse_args()
 
 
@@ -227,35 +320,38 @@ def main() -> None:
     args = parse_args()
     suites = [s.strip() for s in args.suites.split(",") if s.strip()]
     out_dir = Path(args.out)
-    records = parse_uct_repository(args.uct, suites=set(suites))
+    uct_root = Path(args.uct)
+
+    records = load_records_incremental(
+        uct_root=uct_root,
+        suites=set(suites),
+        include_retired=args.include_retired,
+        state_file=Path(args.state_file),
+        use_state_cache=not args.no_state_cache,
+    )
 
     mapper = PackageMapper(cache_dir=Path(args.cache_dir))
-    suite_maps = {
-        suite: mapper.get_source_to_binaries(suite, refresh=args.refresh_package_cache)
-        for suite in suites
-    }
 
     metadata: dict[str, object] = {
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "uct_commit": get_uct_commit(Path(args.uct)),
+        "uct_commit": get_uct_commit(uct_root),
+        "include_retired": bool(args.include_retired),
+        "state_cache": not args.no_state_cache,
         "suites": {},
     }
 
     for suite in suites:
+        suite_map = mapper.get_source_to_binaries(suite, refresh=args.refresh_package_cache)
         cves, rows, pairs = build_suite_feed(
             suite=suite,
             records=records,
-            suite_map=suite_maps[suite],
+            suite_map=suite_map,
         )
         result = write_feed(out_dir / suite, cves, rows, pairs)
         metadata["suites"][suite] = {"cves": result.cve_count, "packages": result.package_rows}
 
-    cves, rows, pairs = build_generic_feed(
-        records=records,
-        suite_maps=suite_maps,
-        suites=suites,
-    )
-    result = write_feed(out_dir / "GENERIC", cves, rows, pairs)
+    generic_cves = build_generic_feed(records=records, suites=suites)
+    result = write_feed(out_dir / "GENERIC", generic_cves, [], [])
     metadata["suites"]["GENERIC"] = {"cves": result.cve_count, "packages": result.package_rows}
 
     if args.metadata:

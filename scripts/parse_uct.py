@@ -100,8 +100,12 @@ def parse_uct_file(path: Path, suites: Optional[set[str]] = None) -> Optional[CV
     )
 
 
-def iter_uct_files(uct_root: Path) -> Iterable[Path]:
-    for subdir in ("active", "retired"):
+def iter_uct_files(uct_root: Path, include_retired: bool = True) -> Iterable[Path]:
+    subdirs = ["active"]
+    if include_retired:
+        subdirs.append("retired")
+
+    for subdir in subdirs:
         d = uct_root / subdir
         if not d.exists():
             continue
@@ -110,11 +114,15 @@ def iter_uct_files(uct_root: Path) -> Iterable[Path]:
                 yield path
 
 
-def parse_uct_repository(uct_root: str | Path, suites: Optional[set[str]] = None) -> list[CVERecord]:
+def parse_uct_repository(
+    uct_root: str | Path,
+    suites: Optional[set[str]] = None,
+    include_retired: bool = True,
+) -> list[CVERecord]:
     root = Path(uct_root)
     records: list[CVERecord] = []
 
-    for path in iter_uct_files(root):
+    for path in iter_uct_files(root, include_retired=include_retired):
         record = parse_uct_file(path, suites=suites)
         if record is not None:
             records.append(record)

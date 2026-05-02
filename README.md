@@ -28,17 +28,33 @@ Published paths:
 git clone https://github.com/trikusec/ubt2dsa.git
 cd ubt2dsa
 git clone --depth=1 https://git.launchpad.net/ubuntu-cve-tracker uct
-python3 scripts/generate.py --uct uct --out release/1 --metadata metadata.json
+
+# Fast incremental mode (default): active/ only + parser state cache
+python3 scripts/generate.py \
+  --uct uct \
+  --out release/1 \
+  --metadata metadata.json \
+  --state-file .cache/uct-state.json
+
+# Full rebuild mode: parse active/ + retired/ and ignore incremental state
+python3 scripts/generate.py \
+  --uct uct \
+  --out release/1 \
+  --metadata metadata.json \
+  --include-retired \
+  --no-state-cache
 ```
 
 ## Data source and caveats
 
-- Primary source: Canonical Ubuntu CVE Tracker (`active/`, `retired/` files).
+- Primary source: Canonical Ubuntu CVE Tracker (`active/` by default for performance; `--include-retired` for full rebuilds).
 - Binary package mapping is resolved from Ubuntu `Packages.gz` indices
   (`main`, `restricted`, `universe`, `multiverse`; release/updates/security).
 - ESM-only fixes are not currently split from public fixes in debsecan output.
 - Version-based fixed detection can still produce false positives for some
   Ubuntu backports.
+- `GENERIC` feed keeps CVE section only (no package rows) to avoid extremely
+  heavy generation and memory usage.
 
 ## Contributing / reporting issues
 
