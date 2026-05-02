@@ -1,0 +1,60 @@
+name: Update CVE feed
+
+on:
+  schedule:
+    - cron: '0 4 * * *'
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Ensure gh-pages branch exists locally
+        run: |
+          if git ls-remote --exit-code --heads origin gh-pages; then
+            git fetch origin gh-pages:gh-pages
+          elif ! git show-ref --verify --quiet refs/heads/gh-pages; then
+            git branch gh-pages
+          fi
+
+      - name: Checkout gh-pages worktree
+        run: git worktree add gh-pages-out gh-pages
+
+      - name: Clone Ubuntu CVE Tracker
+        run: git clone --depth=1 https://git.launchpad.net/ubuntu-cve-tracker uct
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r scripts/requirements.txt
+
+      - name: Generate feeds + metadata
+        run: |
+          python scripts/generate.py \
+            --uct uct \
+            --out gh-pages-out/release/1 \
+            --metadata gh-pages-out/metadata.json
+
+      - name: Publish gh-pages
+        run: |
+          cd gh-pages-out
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          touch .nojekyll
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: update CVE feeds $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            git push origin gh-pages
+          fi
