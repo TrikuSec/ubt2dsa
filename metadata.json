@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-27T06:49:51Z",
+  "generated_at": "2026-06-28T07:47:08Z",
   "include_retired": false,
   "max_binaries_per_source": 10,
   "state_cache": true,
@@ -25,5 +25,5 @@
       "packages": 204228
     }
   },
-  "uct_commit": "35dfd7bb7"
+  "uct_commit": "47c1450ab"
 }
