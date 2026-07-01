@@ -1,11 +1,11 @@
 {
-  "generated_at": "2026-06-29T08:54:04Z",
+  "generated_at": "2026-07-01T08:07:30Z",
   "include_retired": false,
   "max_binaries_per_source": 10,
   "state_cache": true,
   "suites": {
     "GENERIC": {
-      "cves": 8544,
+      "cves": 8617,
       "packages": 0
     },
     "bionic": {
@@ -17,13 +17,13 @@
       "packages": 157304
     },
     "jammy": {
-      "cves": 13530,
-      "packages": 365282
+      "cves": 13574,
+      "packages": 366380
     },
     "noble": {
-      "cves": 10120,
-      "packages": 204228
+      "cves": 10193,
+      "packages": 206233
     }
   },
-  "uct_commit": "41fcc051c"
+  "uct_commit": "bdb6629be"
 }
