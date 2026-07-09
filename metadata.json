@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-07-08T06:24:59Z",
+  "generated_at": "2026-07-09T07:44:04Z",
   "include_retired": false,
   "max_binaries_per_source": 10,
   "state_cache": true,
@@ -17,13 +17,13 @@
       "packages": 157206
     },
     "jammy": {
-      "cves": 13609,
-      "packages": 365756
+      "cves": 13629,
+      "packages": 365973
     },
     "noble": {
-      "cves": 10261,
-      "packages": 207172
+      "cves": 10281,
+      "packages": 207375
     }
   },
-  "uct_commit": "c1fd833ea"
+  "uct_commit": "de5e761ed"
 }
