@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-07-26T06:33:11Z",
+  "generated_at": "2026-07-27T06:59:17Z",
   "include_retired": false,
   "max_binaries_per_source": 10,
   "state_cache": true,
@@ -22,8 +22,8 @@
     },
     "noble": {
       "cves": 10873,
-      "packages": 215109
+      "packages": 215102
     }
   },
-  "uct_commit": "70a97f1d4"
+  "uct_commit": "e012600a4"
 }
